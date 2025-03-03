@@ -16,6 +16,7 @@ from langchain import hub
 import pinecone
 from langchain_pinecone import PineconeVectorStore
 
+
 class LangChainJSONFAQSplitter:
     """
     A class for processing JSON FAQ data using LangChain components.
@@ -115,12 +116,11 @@ documents = main()
 model_name = 'multilingual-e5-large'
 embeddings = PineconeEmbeddings(
     model=model_name,
-    pinecone_api_key="pcsk_25wNg6_KHi3Sv9nxUk228sbyJdDH4AM17qqgZVKAqcjvstkUTEBVCmWwnoYE99VpzEkL1R"
+    pinecone_api_key=os.environ.get('PINECONE_API_KEY')
 )
 
 
 
-# pinecone.init(api_key="pcsk_25wNg6_KHi3Sv9nxUk228sbyJdDH4AM17qqgZVKAqcjvstkUTEBVCmWwnoYE99VpzEkL1R")
 
 cloud = os.environ.get('PINECONE_CLOUD') or 'aws'
 region = os.environ.get('PINECONE_REGION') or 'us-east-1'
@@ -128,7 +128,7 @@ spec = ServerlessSpec(cloud=cloud, region=region)
 
 index_name = "rag-getting-started"
 
-pc = Pinecone(api_key="pcsk_25wNg6_KHi3Sv9nxUk228sbyJdDH4AM17qqgZVKAqcjvstkUTEBVCmWwnoYE99VpzEkL1R")
+pc = Pinecone(api_key=os.environ.get('PINECONE_API_KEY'))
 
 # Get the dimensions from your embedding model
 model_name = 'multilingual-e5-large'
@@ -179,7 +179,7 @@ else:
 
 
 namespace = "wondervector5000"
-pc = Pinecone(api_key="pcsk_25wNg6_KHi3Sv9nxUk228sbyJdDH4AM17qqgZVKAqcjvstkUTEBVCmWwnoYE99VpzEkL1R")
+pc = Pinecone(api_key=os.environ.get('PINECONE_API_KEY'))
 
 docsearch = PineconeVectorStore.from_documents(
     documents=documents,
@@ -194,7 +194,7 @@ retrieval_qa_chat_prompt = hub.pull("langchain-ai/retrieval-qa-chat")
 retriever=docsearch.as_retriever()
 
 llm = ChatGroq(
-    groq_api_key="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",
+    groq_api_key=os.environ.get('GROQ_API_KEY'),
     model="mixtral-8x7b-32768",
     temperature=0,
     max_tokens=None,
