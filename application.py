@@ -3,6 +3,16 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Any, Dict, List
 from fastapi.middleware.cors import CORSMiddleware
+import os
+from dotenv import load_dotenv
+from pathlib import Path
+
+# Get absolute path to the .env file
+env_path = Path('.env')
+load_dotenv(dotenv_path=env_path)
+
+# Debug print
+print(f"PINECONE_API_KEY loaded: {'Yes' if os.getenv('PINECONE_API_KEY') else 'No'}")
 
 app = FastAPI()
 
