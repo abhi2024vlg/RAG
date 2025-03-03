@@ -59,6 +59,11 @@ st.markdown("""
         border-radius: 10px;
         margin: 5px 0;
     }
+    .stButton>button {
+        width: 100%;
+    }
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -66,168 +71,160 @@ st.markdown("""
 st.title("JioPay FAQ Chatbot")
 st.markdown("Ask questions about JioPay services and get instant answers from our knowledge base.")
 
-# Sidebar for configuration and document upload
-with st.sidebar:
-    st.header("Configuration")
+# LangChain JSON FAQ Splitter Class
+class LangChainJSONFAQSplitter:
+    def __init__(self, chunk_size=1000, chunk_overlap=0):
+        self.text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            separators=["\n\n", "\n", ". ", " ", ""]
+        )
     
-    # Add file uploader for JSON FAQ files
-    uploaded_file = st.file_uploader("Upload JSON FAQ file", type=["json"])
-    
-    # Process documents button
-    if uploaded_file is not None and st.button("Process Documents"):
-        with st.spinner("Processing documents..."):
-            try:
-                # Read JSON data from uploaded file
-                json_data = uploaded_file.read().decode("utf-8")
-                
-                # LangChain JSON FAQ Splitter Class
-                class LangChainJSONFAQSplitter:
-                    def __init__(self, chunk_size=1000, chunk_overlap=0):
-                        self.text_splitter = RecursiveCharacterTextSplitter(
-                            chunk_size=chunk_size,
-                            chunk_overlap=chunk_overlap,
-                            separators=["\n\n", "\n", ". ", " ", ""]
-                        )
-                    
-                    def process_json_faqs(self, json_data):
-                        faq_sections = json.loads(json_data)
-                        documents = []
-                        
-                        for section in faq_sections:
-                            source = section.get("source", "")
-                            title = section.get("title", "")
-                            content = section.get("content", "").strip()
-                            
-                            # Extract QA pairs from the content
-                            pairs = []
-                            lines = content.split("\n")
-                            i = 0
-                            
-                            while i < len(lines):
-                                if lines[i].strip():
-                                    question = lines[i].strip()
-                                    answer = lines[i+1].strip() if i+1 < len(lines) else ""
-                                    pairs.append(f"Q: {question}\nA: {answer}")
-                                    i += 2
-                                else:
-                                    i += 1
-                            
-                            # Join all QA pairs for this section
-                            section_text = "\n\n".join(pairs)
-                            
-                            # Create metadata
-                            metadata = {
-                                "source": source,
-                                "title": title,
-                                "category": title.replace(" FAQ", "")
-                            }
-                            
-                            # Create initial document
-                            section_doc = Document(page_content=section_text, metadata=metadata)
-                            
-                            # Split into smaller chunks if needed
-                            if len(section_text) > 1000:
-                                split_docs = self.text_splitter.split_documents([section_doc])
-                                documents.extend(split_docs)
-                            else:
-                                documents.append(section_doc)
-                        
-                        return documents
-                
-                # Create splitter and process the data
-                splitter = LangChainJSONFAQSplitter(chunk_size=500, chunk_overlap=50)
-                documents = splitter.process_json_faqs(json_data)
-                
-                # Pinecone setup
-                model_name = 'multilingual-e5-large'
-                embeddings = PineconeEmbeddings(
-                    model=model_name,
-                    pinecone_api_key=os.getenv("PINECONE_API_KEY")
-                )
-                
-                cloud = os.environ.get('PINECONE_CLOUD') or 'aws'
-                region = os.environ.get('PINECONE_REGION') or 'us-east-1'
-                spec = ServerlessSpec(cloud=cloud, region=region)
-                
-                index_name = "rag-getting-started"
-                
-                pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
-                
-                # Get the dimensions from your embedding model
-                embedding_dimensions = 1024  # multilingual-e5-large has 1024 dimensions
-                
-                # Check if index exists and has correct dimensions
-                if index_name in pc.list_indexes().names():
-                    index_info = pc.describe_index(index_name)
-                    existing_dimensions = index_info.dimension
-                    
-                    if existing_dimensions != embedding_dimensions:
-                        st.warning(f"Existing index has {existing_dimensions} dimensions, but your model needs {embedding_dimensions}. Recreating index...")
-                        pc.delete_index(index_name)
-                        time.sleep(5)  # Give it time to delete
-                        
-                        # Create new index
-                        pc.create_index(
-                            name=index_name,
-                            dimension=embedding_dimensions,
-                            metric="cosine",
-                            spec=ServerlessSpec(
-                                cloud='aws',
-                                region='us-east-1'
-                            )
-                        )
-                        # Wait for index to be ready
-                        while not pc.describe_index(index_name).status['ready']:
-                            time.sleep(1)
+    def process_json_faqs(self, json_data):
+        faq_sections = json.loads(json_data)
+        documents = []
+        
+        for section in faq_sections:
+            source = section.get("source", "")
+            title = section.get("title", "")
+            content = section.get("content", "").strip()
+            
+            # Extract QA pairs from the content
+            pairs = []
+            lines = content.split("\n")
+            i = 0
+            
+            while i < len(lines):
+                if lines[i].strip():
+                    question = lines[i].strip()
+                    answer = lines[i+1].strip() if i+1 < len(lines) else ""
+                    pairs.append(f"Q: {question}\nA: {answer}")
+                    i += 2
                 else:
-                    # Create new index
-                    st.info(f"Creating new index {index_name} with dimensions {embedding_dimensions}...")
-                    pc.create_index(
-                        name=index_name,
-                        dimension=embedding_dimensions,
-                        metric="cosine",
-                        spec=ServerlessSpec(
-                            cloud='aws',
-                            region='us-east-1'
-                        )
+                    i += 1
+            
+            # Join all QA pairs for this section
+            section_text = "\n\n".join(pairs)
+            
+            # Create metadata
+            metadata = {
+                "source": source,
+                "title": title,
+                "category": title.replace(" FAQ", "")
+            }
+            
+            # Create initial document
+            section_doc = Document(page_content=section_text, metadata=metadata)
+            
+            # Split into smaller chunks if needed
+            if len(section_text) > 1000:
+                split_docs = self.text_splitter.split_documents([section_doc])
+                documents.extend(split_docs)
+            else:
+                documents.append(section_doc)
+        
+        return documents
+
+# Function to process JSON data
+def process_faq_data(json_data):
+    try:
+        # Create splitter and process the data
+        splitter = LangChainJSONFAQSplitter(chunk_size=500, chunk_overlap=50)
+        documents = splitter.process_json_faqs(json_data)
+        
+        # Pinecone setup
+        model_name = 'multilingual-e5-large'
+        embeddings = PineconeEmbeddings(
+            model=model_name,
+            pinecone_api_key=os.getenv("PINECONE_API_KEY")
+        )
+        
+        cloud = os.environ.get('PINECONE_CLOUD') or 'aws'
+        region = os.environ.get('PINECONE_REGION') or 'us-east-1'
+        spec = ServerlessSpec(cloud=cloud, region=region)
+        
+        index_name = "rag-getting-started"
+        
+        pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+        
+        # Get the dimensions from your embedding model
+        embedding_dimensions = 1024  # multilingual-e5-large has 1024 dimensions
+        
+        # Check if index exists and has correct dimensions
+        if index_name in pc.list_indexes().names():
+            index_info = pc.describe_index(index_name)
+            existing_dimensions = index_info.dimension
+            
+            if existing_dimensions != embedding_dimensions:
+                st.warning(f"Existing index has {existing_dimensions} dimensions, but your model needs {embedding_dimensions}. Recreating index...")
+                pc.delete_index(index_name)
+                time.sleep(5)  # Give it time to delete
+                
+                # Create new index
+                pc.create_index(
+                    name=index_name,
+                    dimension=embedding_dimensions,
+                    metric="cosine",
+                    spec=ServerlessSpec(
+                        cloud='aws',
+                        region='us-east-1'
                     )
-                    # Wait for index to be ready
-                    while not pc.describe_index(index_name).status['ready']:
-                        time.sleep(1)
-                
-                namespace = "wondervector5000"
-                
-                # Store documents in Pinecone
-                docsearch = PineconeVectorStore.from_documents(
-                    documents=documents,
-                    index_name=index_name,
-                    embedding=embeddings,
-                    namespace=namespace,
                 )
-                time.sleep(2)
-                
-                # Create retrieval chain
-                retrieval_qa_chat_prompt = hub.pull("langchain-ai/retrieval-qa-chat")
-                retriever = docsearch.as_retriever()
-                
-                llm = ChatGroq(
-                    groq_api_key=os.getenv("GROQ_API_KEY"),
-                    model="mixtral-8x7b-32768",
-                    temperature=0,
-                    max_tokens=None,
-                    timeout=None,
+                # Wait for index to be ready
+                while not pc.describe_index(index_name).status['ready']:
+                    time.sleep(1)
+        else:
+            # Create new index
+            st.info(f"Creating new index {index_name} with dimensions {embedding_dimensions}...")
+            pc.create_index(
+                name=index_name,
+                dimension=embedding_dimensions,
+                metric="cosine",
+                spec=ServerlessSpec(
+                    cloud='aws',
+                    region='us-east-1'
                 )
-                
-                combine_docs_chain = create_stuff_documents_chain(
-                    llm, retrieval_qa_chat_prompt
-                )
-                st.session_state.retrieval_chain = create_retrieval_chain(retriever, combine_docs_chain)
-                st.session_state.documents_processed = True
-                
-                st.success(f"Successfully processed {len(documents)} document chunks!")
-                
-            except Exception as e:
-                st.error(f"Error processing documents: {str(e)}")
+            )
+            # Wait for index to be ready
+            while not pc.describe_index(index_name).status['ready']:
+                time.sleep(1)
+        
+        namespace = "wondervector5000"
+        
+        # Store documents in Pinecone
+        docsearch = PineconeVectorStore.from_documents(
+            documents=documents,
+            index_name=index_name,
+            embedding=embeddings,
+            namespace=namespace,
+        )
+        time.sleep(2)
+        
+        # Create retrieval chain
+        retrieval_qa_chat_prompt = hub.pull("langchain-ai/retrieval-qa-chat")
+        retriever = docsearch.as_retriever()
+        
+        llm = ChatGroq(
+            groq_api_key=os.getenv("GROQ_API_KEY"),
+            model="mixtral-8x7b-32768",
+            temperature=0,
+            max_tokens=None,
+            timeout=None,
+        )
+        
+        combine_docs_chain = create_stuff_documents_chain(
+            llm, retrieval_qa_chat_prompt
+        )
+        st.session_state.retrieval_chain = create_retrieval_chain(retriever, combine_docs_chain)
+        
+        return True, f"Successfully processed {len(documents)} document chunks!"
+        
+    except Exception as e:
+        return False, f"Error processing documents: {str(e)}"
+
+# Sidebar for configuration and status
+with st.sidebar:
+    st.header("Status")
     
     # Display API key status
     st.subheader("API Keys Status")
@@ -237,14 +234,68 @@ with st.sidebar:
     st.info(f"Pinecone API: {pinecone_key}")
     st.info(f"Groq API: {groq_key}")
     
+    # Status of the chatbot
+    st.subheader("Chatbot Status")
+    if st.session_state.documents_processed:
+        st.success("✓ Chatbot is ready")
+    else:
+        st.warning("⚠️ Chatbot initializing...")
+    
+    # Admin-only section (hidden in production)
+    with st.expander("Admin Options (Development Only)", expanded=False):
+        # Path to the local FAQ JSON file
+        faq_file_path = "dummy_jiopay_faqs.json"
+        
+        # Manual initialization option
+        if st.button("Reinitialize Chatbot"):
+            with st.spinner("Reinitializing..."):
+                try:
+                    # Check if file exists
+                    if os.path.exists(faq_file_path):
+                        with open(faq_file_path, "r") as f:
+                            json_data = f.read()
+                        
+                        success, message = process_faq_data(json_data)
+                        if success:
+                            st.session_state.documents_processed = True
+                            st.success(message)
+                        else:
+                            st.error(message)
+                    else:
+                        st.error(f"FAQ file not found at {faq_file_path}")
+                except Exception as e:
+                    st.error(f"Error: {str(e)}")
+    
     # Instructions
     st.markdown("---")
     st.markdown("""
     ### How to use
-    1. Upload your JSON FAQ file
-    2. Click "Process Documents"
-    3. Start chatting in the main panel
+    1. Type your question in the chat box
+    2. Press Enter to get an answer
+    3. Try the suggested questions on the right
     """)
+
+# Auto-initialize the chatbot if not already done
+if not st.session_state.documents_processed:
+    with st.spinner("Initializing JioPay FAQ Chatbot..."):
+        try:
+            # Path to the local FAQ JSON file
+            faq_file_path = "dummy_jiopay_faqs.json"
+            
+            # Check if file exists
+            if os.path.exists(faq_file_path):
+                with open(faq_file_path, "r") as f:
+                    json_data = f.read()
+                
+                success, message = process_faq_data(json_data)
+                if success:
+                    st.session_state.documents_processed = True
+                else:
+                    st.warning(message)
+            else:
+                st.warning(f"FAQ file not found. Please contact the administrator.")
+        except Exception as e:
+            st.warning(f"Initializing in progress: {str(e)}")
 
 # Main chat interface
 col1, col2 = st.columns([2, 1])
@@ -292,7 +343,7 @@ with col1:
                     st.session_state.messages.append({"role": "assistant", "content": error_msg})
                     st.rerun()
         else:
-            message = "Please upload and process FAQ documents first using the sidebar options."
+            message = "The chatbot is still initializing. Please wait a moment and try again."
             st.session_state.messages.append({"role": "assistant", "content": message})
             st.rerun()
 
@@ -337,6 +388,6 @@ with col2:
                         st.session_state.messages.append({"role": "assistant", "content": error_msg})
                         st.rerun()
             else:
-                message = "Please upload and process FAQ documents first using the sidebar options."
+                message = "The chatbot is still initializing. Please wait a moment and try again."
                 st.session_state.messages.append({"role": "assistant", "content": message})
                 st.rerun()
