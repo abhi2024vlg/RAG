@@ -100,7 +100,7 @@ class LangChainJSONFAQSplitter:
 
 def main():
     # Read JSON from file (or use the provided string)
-    with open('/Users/abhinavkumar/Desktop/RAG/data/dummy_jiopay_faqs.json', 'r') as file:
+    with open('dummy_jiopay_faqs.json', 'r') as file:
         json_data = file.read()
     
     # Create splitter and process the data
