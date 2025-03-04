@@ -151,8 +151,9 @@ def process_faq_data(json_data):
         # Pinecone setup
         print("Setting up Pinecone embeddings...")
         embeddings = PineconeEmbeddings(
-            model='intfloat/multilingual-e5-large-instruct',
-            pinecone_api_key=os.getenv("PINECONE_API_KEY")
+            model='multilingual-e5-large',
+            pinecone_api_key=os.getenv("PINECONE_API_KEY"),
+            batch_size=32
         )
         print("Embeddings initialized successfully")
 
