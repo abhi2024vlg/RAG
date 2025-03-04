@@ -338,7 +338,7 @@ with col2:
 if not st.session_state.documents_processed:
     with st.spinner("Initializing JioPay FAQ Chatbot..."):
         try:
-            faq_file_path = "dummy_jiopay_faqs.json"
+            faq_file_path = "jiopay_faqs.json"
             if os.path.exists(faq_file_path):
                 with open(faq_file_path, "r") as f:
                     json_data = f.read()
