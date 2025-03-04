@@ -1,7 +1,5 @@
 import streamlit as st
-import os
 from pathlib import Path
-from dotenv import load_dotenv
 import json
 from langchain_core.documents import Document
 from langchain_pinecone import PineconeEmbeddings, PineconeVectorStore
@@ -16,12 +14,8 @@ from langchain_community.retrievers import BM25Retriever
 from langchain.prompts import ChatPromptTemplate
 from langchain.retrievers import EnsembleRetriever
 
-# Load environment variables from .env file
-env_path = Path('.env')
-load_dotenv(dotenv_path=env_path)
-
 # Initialize Pinecone
-pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+pc = Pinecone(api_key=st.secrets["PINECONE_API_KEY"])
 
 # Page configuration
 st.set_page_config(
@@ -152,7 +146,7 @@ def process_faq_data(json_data):
         print("Setting up Pinecone embeddings...")
         embeddings = PineconeEmbeddings(
             model='multilingual-e5-large',
-            pinecone_api_key=os.getenv("PINECONE_API_KEY"),
+            pinecone_api_key=st.secrets["PINECONE_API_KEY"],
             batch_size=32
         )
         print("Embeddings initialized successfully")
@@ -223,7 +217,7 @@ def process_faq_data(json_data):
         # Setup LLM
         print("Setting up LLM...")
         llm = ChatGroq(
-            groq_api_key=os.getenv("GROQ_API_KEY"),
+            groq_api_key=st.secrets["GROQ_API_KEY"],
             model="mixtral-8x7b-32768",
             temperature=0,
             max_tokens=512,
@@ -249,8 +243,8 @@ def process_faq_data(json_data):
 with st.sidebar:
     st.header("Status")
     st.subheader("API Keys Status")
-    pinecone_key = "✓ Connected" if os.getenv("PINECONE_API_KEY") else "❌ Missing"
-    groq_key = "✓ Connected" if os.getenv("GROQ_API_KEY") else "❌ Missing"
+    pinecone_key = "✓ Connected" if st.secrets.get("PINECONE_API_KEY") else "❌ Missing"
+    groq_key = "✓ Connected" if st.secrets.get("GROQ_API_KEY") else "❌ Missing"
 
     st.info(f"Pinecone API: {pinecone_key}")
     st.info(f"Groq API: {groq_key}")
@@ -260,7 +254,6 @@ with st.sidebar:
         st.success("✓ Chatbot is ready")
     else:
         st.warning("⚠️ Chatbot initializing...")
-
 
 # Main chat interface
 col1, col2 = st.columns([2, 1])
@@ -341,7 +334,7 @@ if not st.session_state.documents_processed:
     with st.spinner("Initializing JioPay FAQ Chatbot..."):
         try:
             faq_file_path = "jiopay_faqs.json"
-            if os.path.exists(faq_file_path):
+            if Path(faq_file_path).exists():  # Use Path for existence check
                 with open(faq_file_path, "r") as f:
                     json_data = f.read()
 
