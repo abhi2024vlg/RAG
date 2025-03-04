@@ -4,7 +4,6 @@ from pathlib import Path
 from dotenv import load_dotenv
 import json
 from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_pinecone import PineconeEmbeddings, PineconeVectorStore
 from langchain_groq import ChatGroq
 from langchain.chains import create_retrieval_chain
@@ -12,10 +11,17 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain import hub
 from pinecone import Pinecone, ServerlessSpec
 import time
+from langchain_text_splitters import MarkdownHeaderTextSplitter
+from langchain_community.retrievers import BM25Retriever
+from langchain.prompts import ChatPromptTemplate
+from langchain.retrievers import EnsembleRetriever
 
 # Load environment variables from .env file
 env_path = Path('.env')
 load_dotenv(dotenv_path=env_path)
+
+# Initialize Pinecone
+pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 
 # Page configuration
 st.set_page_config(
@@ -67,166 +73,121 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Title and description
-st.title("JioPay FAQ Chatbot")
-st.markdown("Ask questions about JioPay services and get instant answers from our knowledge base.")
-
-# LangChain JSON FAQ Splitter Class
-class LangChainJSONFAQSplitter:
-    def __init__(self, chunk_size=1000, chunk_overlap=0):
-        self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-            separators=["\n\n", "\n", ". ", " ", ""]
-        )
+def semantic_chunking(json_data):
+    faq_sections = json.loads(json_data)
+    documents = []
     
-    def process_json_faqs(self, json_data):
-        faq_sections = json.loads(json_data)
-        documents = []
+    for section in faq_sections:
+        source = section.get("source", "")
+        title = section.get("title", "")
+        content = section.get("content", "").strip()
         
-        for section in faq_sections:
-            source = section.get("source", "")
-            title = section.get("title", "")
-            content = section.get("content", "").strip()
-            
-            # Extract QA pairs from the content
-            pairs = []
-            lines = content.split("\n")
-            i = 0
-            
-            while i < len(lines):
-                if lines[i].strip():
-                    question = lines[i].strip()
-                    answer = lines[i+1].strip() if i+1 < len(lines) else ""
-                    pairs.append(f"Q: {question}\nA: {answer}")
-                    i += 2
-                else:
-                    i += 1
-            
-            # Join all QA pairs for this section
-            section_text = "\n\n".join(pairs)
-            
-            # Create metadata
-            metadata = {
-                "source": source,
-                "title": title,
-                "category": title.replace(" FAQ", "")
-            }
-            
-            # Create initial document
-            section_doc = Document(page_content=section_text, metadata=metadata)
-            
-            # Split into smaller chunks if needed
-            if len(section_text) > 1000:
-                split_docs = self.text_splitter.split_documents([section_doc])
-                documents.extend(split_docs)
+        lines = content.split("\n")
+        i = 0
+        
+        while i < len(lines):
+            if lines[i].strip():
+                question = lines[i].strip()
+                answer = lines[i+1].strip() if i+1 < len(lines) else ""
+                
+                doc = Document(
+                    page_content=f"Question: {question}\nAnswer: {answer}",
+                    metadata={
+                        "source": source,
+                        "title": title,
+                        "category": title.replace(" FAQ", ""),
+                        "question": question
+                    }
+                )
+                documents.append(doc)
+                i += 2
             else:
-                documents.append(section_doc)
-        
-        return documents
+                i += 1
+    
+    return documents
 
-# Function to process JSON data
 def process_faq_data(json_data):
     try:
-        # Create splitter and process the data
-        splitter = LangChainJSONFAQSplitter(chunk_size=500, chunk_overlap=50)
-        documents = splitter.process_json_faqs(json_data)
+        documents = semantic_chunking(json_data)
         
+        # Create BM25 retriever
+        bm25_retriever = BM25Retriever.from_documents(documents)
+        bm25_retriever.k = 5
+
         # Pinecone setup
-        model_name = 'multilingual-e5-large'
         embeddings = PineconeEmbeddings(
-            model=model_name,
+            model='intfloat/multilingual-e5-large-instruct',
             pinecone_api_key=os.getenv("PINECONE_API_KEY")
         )
-        
-        cloud = os.environ.get('PINECONE_CLOUD') or 'aws'
-        region = os.environ.get('PINECONE_REGION') or 'us-east-1'
-        spec = ServerlessSpec(cloud=cloud, region=region)
-        
-        index_name = "rag-getting-started"
-        
-        pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
-        
-        # Get the dimensions from your embedding model
-        embedding_dimensions = 1024  # multilingual-e5-large has 1024 dimensions
-        
-        # Check if index exists and has correct dimensions
-        if index_name in pc.list_indexes().names():
-            index_info = pc.describe_index(index_name)
-            existing_dimensions = index_info.dimension
-            
-            if existing_dimensions != embedding_dimensions:
-                st.warning(f"Existing index has {existing_dimensions} dimensions, but your model needs {embedding_dimensions}. Recreating index...")
-                pc.delete_index(index_name)
-                time.sleep(5)  # Give it time to delete
-                
-                # Create new index
-                pc.create_index(
-                    name=index_name,
-                    dimension=embedding_dimensions,
-                    metric="cosine",
-                    spec=ServerlessSpec(
-                        cloud='aws',
-                        region='us-east-1'
-                    )
-                )
-                # Wait for index to be ready
-                while not pc.describe_index(index_name).status['ready']:
-                    time.sleep(1)
-        else:
-            # Create new index
-            st.info(f"Creating new index {index_name} with dimensions {embedding_dimensions}...")
+
+        index_name = "jiopay-faq-improved"
+        embedding_dimensions = 1024
+
+        # Create or verify index
+        if index_name not in pc.list_indexes().names():
             pc.create_index(
                 name=index_name,
                 dimension=embedding_dimensions,
                 metric="cosine",
-                spec=ServerlessSpec(
-                    cloud='aws',
-                    region='us-east-1'
-                )
+                spec=ServerlessSpec(cloud="aws", region="us-east-1")
             )
-            # Wait for index to be ready
-            while not pc.describe_index(index_name).status['ready']:
-                time.sleep(1)
-        
-        namespace = "wondervector5000"
+            time.sleep(10)
+
+        namespace = "jiopay_improved"
         
         # Store documents in Pinecone
-        docsearch = PineconeVectorStore.from_documents(
+        vector_store = PineconeVectorStore.from_documents(
             documents=documents,
-            index_name=index_name,
             embedding=embeddings,
-            namespace=namespace,
+            index_name=index_name,
+            namespace=namespace
         )
-        time.sleep(2)
-        
-        # Create retrieval chain
-        retrieval_qa_chat_prompt = hub.pull("langchain-ai/retrieval-qa-chat")
-        retriever = docsearch.as_retriever()
-        
+
+        # Create Pinecone retriever
+        pinecone_retriever = vector_store.as_retriever(
+            search_type="mmr",
+            search_kwargs={"k": 5, "fetch_k": 10, "lambda_mult": 0.7}
+        )
+
+        # Create ensemble retriever
+        ensemble_retriever = EnsembleRetriever(
+            retrievers=[bm25_retriever, pinecone_retriever],
+            weights=[0.4, 0.6]
+        )
+
+        # Create RAG prompt
+        rag_prompt = ChatPromptTemplate.from_template("""
+        You are a customer service AI assistant for JioPay. Answer questions based ONLY on the context.
+        If unsure, say "I don't have enough information. Contact JioPay support at merchant.support@jiopay.in".
+
+        Context:
+        {context}
+
+        Question: {input}
+
+        Answer professionally using ONLY context. Include specific details if available.
+        """)
+
+        # Setup LLM
         llm = ChatGroq(
             groq_api_key=os.getenv("GROQ_API_KEY"),
             model="mixtral-8x7b-32768",
             temperature=0,
-            max_tokens=None,
-            timeout=None,
+            max_tokens=512,
         )
-        
-        combine_docs_chain = create_stuff_documents_chain(
-            llm, retrieval_qa_chat_prompt
-        )
-        st.session_state.retrieval_chain = create_retrieval_chain(retriever, combine_docs_chain)
-        
-        return True, f"Successfully processed {len(documents)} document chunks!"
-        
+
+        # Create chain
+        combine_docs_chain = create_stuff_documents_chain(llm, rag_prompt)
+        retrieval_chain = create_retrieval_chain(ensemble_retriever, combine_docs_chain)
+
+        return retrieval_chain, True, f"Processed {len(documents)} documents successfully"
+    
     except Exception as e:
-        return False, f"Error processing documents: {str(e)}"
+        return None, False, f"Error processing documents: {str(e)}"
 
 # Sidebar for configuration and status
 with st.sidebar:
     st.header("Status")
-    
-    # Display API key status
     st.subheader("API Keys Status")
     pinecone_key = "✓ Connected" if os.getenv("PINECONE_API_KEY") else "❌ Missing"
     groq_key = "✓ Connected" if os.getenv("GROQ_API_KEY") else "❌ Missing"
@@ -234,68 +195,11 @@ with st.sidebar:
     st.info(f"Pinecone API: {pinecone_key}")
     st.info(f"Groq API: {groq_key}")
     
-    # Status of the chatbot
     st.subheader("Chatbot Status")
     if st.session_state.documents_processed:
         st.success("✓ Chatbot is ready")
     else:
         st.warning("⚠️ Chatbot initializing...")
-    
-    # Admin-only section (hidden in production)
-    with st.expander("Admin Options (Development Only)", expanded=False):
-        # Path to the local FAQ JSON file
-        faq_file_path = "dummy_jiopay_faqs.json"
-        
-        # Manual initialization option
-        if st.button("Reinitialize Chatbot"):
-            with st.spinner("Reinitializing..."):
-                try:
-                    # Check if file exists
-                    if os.path.exists(faq_file_path):
-                        with open(faq_file_path, "r") as f:
-                            json_data = f.read()
-                        
-                        success, message = process_faq_data(json_data)
-                        if success:
-                            st.session_state.documents_processed = True
-                            st.success(message)
-                        else:
-                            st.error(message)
-                    else:
-                        st.error(f"FAQ file not found at {faq_file_path}")
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
-    
-    # Instructions
-    st.markdown("---")
-    st.markdown("""
-    ### How to use
-    1. Type your question in the chat box
-    2. Press Enter to get an answer
-    3. Try the suggested questions on the right
-    """)
-
-# Auto-initialize the chatbot if not already done
-if not st.session_state.documents_processed:
-    with st.spinner("Initializing JioPay FAQ Chatbot..."):
-        try:
-            # Path to the local FAQ JSON file
-            faq_file_path = "dummy_jiopay_faqs.json"
-            
-            # Check if file exists
-            if os.path.exists(faq_file_path):
-                with open(faq_file_path, "r") as f:
-                    json_data = f.read()
-                
-                success, message = process_faq_data(json_data)
-                if success:
-                    st.session_state.documents_processed = True
-                else:
-                    st.warning(message)
-            else:
-                st.warning(f"FAQ file not found. Please contact the administrator.")
-        except Exception as e:
-            st.warning(f"Initializing in progress: {str(e)}")
 
 # Main chat interface
 col1, col2 = st.columns([2, 1])
@@ -303,91 +207,90 @@ col1, col2 = st.columns([2, 1])
 with col1:
     st.markdown("<div class='chat-container'>", unsafe_allow_html=True)
     
-    # Display chat messages
     for message in st.session_state.messages:
-        if message["role"] == "user":
-            st.markdown(f"<div class='user-message'>{message['content']}</div>", unsafe_allow_html=True)
-        else:
-            st.markdown(f"<div class='bot-message'>{message['content']}</div>", unsafe_allow_html=True)
+        role_class = "user-message" if message["role"] == "user" else "bot-message"
+        st.markdown(f"<div class='{role_class}'>{message['content']}</div>", unsafe_allow_html=True)
     
     st.markdown("</div>", unsafe_allow_html=True)
     
-    # Chat input
     if query := st.chat_input("Ask a question about JioPay..."):
-        # Add user message to chat
         st.session_state.messages.append({"role": "user", "content": query})
         
-        # Get bot response
         if st.session_state.retrieval_chain:
             with st.spinner("Thinking..."):
                 try:
                     response = st.session_state.retrieval_chain.invoke({"input": query})
                     answer = response['answer']
                     
-                    # Extract sources if available
-                    sources = []
-                    if 'context' in response:
-                        sources = [doc.metadata.get("source", "") for doc in response['context']]
-                        sources = list(set([s for s in sources if s]))  # Remove duplicates and empty strings
+                    sources = list(set(
+                        doc.metadata.get("source", "") 
+                        for doc in response["context"] 
+                        if doc.metadata.get("source")
+                    ))
                     
-                    # Add source info if available
                     if sources:
-                        source_text = "\n\nSources: " + ", ".join(sources)
-                        answer += source_text
+                        answer += f"\n\nSources: {', '.join(sources)}"
                     
-                    # Add bot response to chat
                     st.session_state.messages.append({"role": "assistant", "content": answer})
                     st.rerun()
                 except Exception as e:
                     error_msg = f"Error: {str(e)}"
                     st.session_state.messages.append({"role": "assistant", "content": error_msg})
                     st.rerun()
-        else:
-            message = "The chatbot is still initializing. Please wait a moment and try again."
-            st.session_state.messages.append({"role": "assistant", "content": message})
-            st.rerun()
 
 with col2:
-    st.markdown("### Recently Asked Questions")
+    st.markdown("### Suggested Questions")
     sample_questions = [
-        "What is JioPay?",
-        "How do I reset my password?",
-        "Is JioPay secure?",
-        "What payment methods are supported?",
-        "How to contact customer support?"
+        "How do I reset my JioPay password?",
+        "What are the transaction limits on JioPay?",
+        "How to contact JioPay customer support?",
+        "Is JioPay available internationally?",
+        "What security features does JioPay have?"
     ]
     
     for question in sample_questions:
         if st.button(question):
-            # Add user message to chat
             st.session_state.messages.append({"role": "user", "content": question})
             
-            # Get bot response
             if st.session_state.retrieval_chain:
                 with st.spinner("Thinking..."):
                     try:
                         response = st.session_state.retrieval_chain.invoke({"input": question})
                         answer = response['answer']
                         
-                        # Extract sources if available
-                        sources = []
-                        if 'context' in response:
-                            sources = [doc.metadata.get("source", "") for doc in response['context']]
-                            sources = list(set([s for s in sources if s]))  # Remove duplicates and empty strings
+                        sources = list(set(
+                            doc.metadata.get("source", "") 
+                            for doc in response["context"] 
+                            if doc.metadata.get("source")
+                        ))
                         
-                        # Add source info if available
                         if sources:
-                            source_text = "\n\nSources: " + ", ".join(sources)
-                            answer += source_text
+                            answer += f"\n\nSources: {', '.join(sources)}"
                         
-                        # Add bot response to chat
                         st.session_state.messages.append({"role": "assistant", "content": answer})
                         st.rerun()
                     except Exception as e:
                         error_msg = f"Error: {str(e)}"
                         st.session_state.messages.append({"role": "assistant", "content": error_msg})
                         st.rerun()
+
+# Initialization logic
+if not st.session_state.documents_processed:
+    with st.spinner("Initializing JioPay FAQ Chatbot..."):
+        try:
+            faq_file_path = "dummy_jiopay_faqs.json"
+            if os.path.exists(faq_file_path):
+                with open(faq_file_path, "r") as f:
+                    json_data = f.read()
+                
+                chain, success, message = process_faq_data(json_data)
+                if success:
+                    st.session_state.retrieval_chain = chain
+                    st.session_state.documents_processed = True
+                    st.success("Chatbot initialized successfully!")
+                else:
+                    st.error(f"Initialization failed: {message}")
             else:
-                message = "The chatbot is still initializing. Please wait a moment and try again."
-                st.session_state.messages.append({"role": "assistant", "content": message})
-                st.rerun()
+                st.error("FAQ file not found. Please check the file path.")
+        except Exception as e:
+            st.error(f"Initialization error: {str(e)}")
