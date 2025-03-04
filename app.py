@@ -251,46 +251,48 @@ with st.sidebar:
     st.subheader("API Keys Status")
     pinecone_key = "✓ Connected" if os.getenv("PINECONE_API_KEY") else "❌ Missing"
     groq_key = "✓ Connected" if os.getenv("GROQ_API_KEY") else "❌ Missing"
-    
+
     st.info(f"Pinecone API: {pinecone_key}")
     st.info(f"Groq API: {groq_key}")
-    
+
     st.subheader("Chatbot Status")
     if st.session_state.documents_processed:
         st.success("✓ Chatbot is ready")
     else:
         st.warning("⚠️ Chatbot initializing...")
 
+
 # Main chat interface
 col1, col2 = st.columns([2, 1])
 
 with col1:
     st.markdown("<div class='chat-container'>", unsafe_allow_html=True)
-    
+
     for message in st.session_state.messages:
         role_class = "user-message" if message["role"] == "user" else "bot-message"
         st.markdown(f"<div class='{role_class}'>{message['content']}</div>", unsafe_allow_html=True)
-    
+
     st.markdown("</div>", unsafe_allow_html=True)
-    
+
+    st.subheader("JioPay Customer Support")
     if query := st.chat_input("Ask a question about JioPay..."):
         st.session_state.messages.append({"role": "user", "content": query})
-        
+
         if st.session_state.retrieval_chain:
             with st.spinner("Thinking..."):
                 try:
                     response = st.session_state.retrieval_chain.invoke({"input": query})
                     answer = response['answer']
-                    
+
                     sources = list(set(
-                        doc.metadata.get("source", "") 
-                        for doc in response["context"] 
+                        doc.metadata.get("source", "")
+                        for doc in response["context"]
                         if doc.metadata.get("source")
                     ))
-                    
+
                     if sources:
-                        answer += f"\n\nSources: {', '.join(sources)}"
-                    
+                        answer += f"\n\nSources: {', '.join(sources)}")
+
                     st.session_state.messages.append({"role": "assistant", "content": answer})
                     st.rerun()
                 except Exception as e:
@@ -307,26 +309,26 @@ with col2:
         "Is JioPay available internationally?",
         "What security features does JioPay have?"
     ]
-    
+
     for question in sample_questions:
         if st.button(question):
             st.session_state.messages.append({"role": "user", "content": question})
-            
+
             if st.session_state.retrieval_chain:
                 with st.spinner("Thinking..."):
                     try:
                         response = st.session_state.retrieval_chain.invoke({"input": question})
                         answer = response['answer']
-                        
+
                         sources = list(set(
-                            doc.metadata.get("source", "") 
-                            for doc in response["context"] 
+                            doc.metadata.get("source", "")
+                            for doc in response["context"]
                             if doc.metadata.get("source")
                         ))
-                        
+
                         if sources:
-                            answer += f"\n\nSources: {', '.join(sources)}"
-                        
+                            answer += f"\n\nSources: {', '.join(sources)}")
+
                         st.session_state.messages.append({"role": "assistant", "content": answer})
                         st.rerun()
                     except Exception as e:
@@ -342,7 +344,7 @@ if not st.session_state.documents_processed:
             if os.path.exists(faq_file_path):
                 with open(faq_file_path, "r") as f:
                     json_data = f.read()
-                
+
                 chain, success, message = process_faq_data(json_data)
                 if success:
                     st.session_state.retrieval_chain = chain
