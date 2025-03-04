@@ -291,7 +291,7 @@ with col1:
                     ))
 
                     if sources:
-                        answer += f"\n\nSources: {', '.join(sources)}")
+                        answer += f"\n\nSources: {', '.join(sources)}"
 
                     st.session_state.messages.append({"role": "assistant", "content": answer})
                     st.rerun()
